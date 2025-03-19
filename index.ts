@@ -5,7 +5,7 @@ import {
  Wallet
 } from 'secretjs';
 
-config({ path: [`./.env.${process.argv[2]}`] }); 
+config({ path: [`./.env.${process.argv[2]}`, './.env'] }); 
 
 enum QUERY_TYPE {
   BALANCE = 'balance',
