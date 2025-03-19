@@ -21,6 +21,6 @@
   "dependencies": {
     "dotenv": "^16.4.5",
     "eslint-plugin-import": "^2.31.0",
-    "secretjs": "^1.8.1"
+    "secretjs": "^1.15.0"
   }
 }

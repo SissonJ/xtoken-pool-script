@@ -1,10 +1,11 @@
 import * as fs from 'fs';
 import { config } from 'dotenv';
 import {
- MsgExecuteContract, SecretNetworkClient 
+ MsgExecuteContract, SecretNetworkClient, 
+ Wallet
 } from 'secretjs';
 
-config();
+config({ path: [`./.env.${process.argv[2]}`] }); 
 
 enum QUERY_TYPE {
   BALANCE = 'balance',
@@ -49,6 +50,9 @@ type Results = {
 const client = new SecretNetworkClient({
   url: process.env.NODE!,
   chainId: process.env.CHAIN_ID!,
+  wallet: new Wallet(process.env.ARB_V4!),
+  walletAddress: process.env.ARB_V4_ADDRESS!,
+  encryptionSeed: Uint8Array.from(process.env.ENCRYPTION_SEED!.split(',').map(Number)),
 });
 
 const encodeJsonToB64 = (toEncode:any) : string => Buffer.from(JSON.stringify(toEncode), 'utf8').toString('base64');
@@ -114,7 +118,7 @@ async function main() {
       `  Successful: ${results.successfulAttempts}` +
       `  Failed: ${results.failedAttempts}` +
       `  Average Query Length: ${results.queryLength?.toFixed(3)}` +
-      `  Average Execute Length: ${results.executeLength?.toFixed(3)}`,
+      `  Average Execute Length: ${results.executeLength?.toFixed(3) ?? -1}`,
       now
     );
   }
@@ -179,6 +183,7 @@ async function main() {
   let xTokenAmount;
   let walletBalance;
   let vaultTotalAssets;
+  let supplyCap;
   response.batch.responses.forEach((encryptedResp) => {
     const id = decodeB64ToJson(encryptedResp.id);
     const responseData = decodeB64ToJson(encryptedResp.response.response);
@@ -196,6 +201,7 @@ async function main() {
       const interestOwed = responseData.lifetime_interest_owed;
       vaultTotalAssets = Number(loanable) + Number(lent) + 
         (Number(interestOwed) - Number(interestPaid));
+      supplyCap = Number(responseData.max_supply) - vaultTotalAssets;
     }
   });
 
@@ -205,6 +211,7 @@ async function main() {
     || vaultTotalAssets === undefined
     || isNaN(vaultTotalAssets)
     || walletBalance === undefined
+    || supplyCap === undefined
   ) {
     throw new Error('Missing required data from batch query response');
   }
@@ -212,9 +219,10 @@ async function main() {
   const swapRate = baseTokenAmount / xTokenAmount;
   let marketRate = 0;
   if (vaultTotalAssets > 0) {
-    console.log(xTokenSupply, vaultTotalAssets);
     marketRate = xTokenSupply / vaultTotalAssets;
   }
+  const percentOfPool = baseTokenAmount * 0.01;
+  let tradeAmount = walletBalance > percentOfPool ? percentOfPool : walletBalance;
 
   let swapFirst = false;
   let secondActionInput = 0;
@@ -228,7 +236,7 @@ async function main() {
       query: {
         swap_simulation: {
           offer: { 
-            amount: walletBalance, 
+            amount: String(tradeAmount), 
             token: {
               custom_token: {
                  contract_addr: process.env.BASE_TOKEN_ADDRESS,
@@ -244,7 +252,10 @@ async function main() {
       * vaultTotalAssets) / xTokenSupply).toFixed(0);
     result = Number(swapFirstFinalAmount);
   } else { // Mint first
-    const xTokenMintAmount = ((walletBalance * xTokenSupply) / vaultTotalAssets).toFixed(0);
+    if(supplyCap < tradeAmount) {
+      tradeAmount = supplyCap;
+    }
+    const xTokenMintAmount = ((tradeAmount * xTokenSupply) / vaultTotalAssets).toFixed(0);
     secondActionInput = Number(xTokenMintAmount);
     const swapSecondResponse = await client.query.compute.queryContract({
       contract_address: process.env.SHADESWAP_ADDRESS!,
@@ -267,7 +278,7 @@ async function main() {
     result = swapSecondFinalAmount;
   }
 
-  if((result - walletBalance) < Number(process.env.MINIMUM_PROFIT)) {
+  if((result - tradeAmount) < Number(process.env.MINIMUM_PROFIT)) {
     return;
   }
   results.totalAttempts += 1;
