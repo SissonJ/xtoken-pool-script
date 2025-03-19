@@ -39,12 +39,14 @@ type SwapSimResponse = {
 }
 
 type Results = {
-  start?: number,
-  totalAttempts: number,
-  successfulAttempts: number,
-  failedAttempts: number,
-  queryLength?: number,
-  executeLength?: number,
+  [key: string]: {
+    start?: number,
+    totalAttempts: number,
+    successfulAttempts: number,
+    failedAttempts: number,
+    queryLength?: number,
+    executeLength?: number,
+  },
 }
 
 const client = new SecretNetworkClient({
@@ -81,25 +83,31 @@ const getCentralTime = (date: Date): string => {
 
 const logger = {
   error: (msg: string, time: Date, error?: any) => {
-    console.error(`[${getCentralTime(time)} ERROR] ${msg}`, error);
+    console.error(`[${getCentralTime(time)} ${(process.env?.argv ?? [1,2,3])[2]} ERROR] ${msg}`, error);
   },
   info: (msg: string, time: Date) => {
-    console.log(`[${getCentralTime(time)} INFO] ${msg}`);
+    console.log(`[${getCentralTime(time)} ${(process.env?.argv ?? [1,2,3])[2]} INFO] ${msg}`);
   }
 };
 
 async function main() {
+  if(process.env?.argv === undefined) {
+    throw new Error('Arugments are undefined');
+  }
   if (!fs.existsSync('./results.txt')) {
     const initialState: Results = {
-      totalAttempts: 0,
-      successfulAttempts: 0,
-      failedAttempts: 0,
+      [process.env.argv[2]]: {
+        totalAttempts: 0,
+        successfulAttempts: 0,
+        failedAttempts: 0,
+      }
     };
     fs.writeFileSync('./results.txt', JSON.stringify(initialState));
   }
 
   const resultsUnparsed = fs.readFileSync('./results.txt', 'utf-8');
-  const results = JSON.parse(resultsUnparsed);
+  const resultsFull: Results = JSON.parse(resultsUnparsed);
+  const results: Results[string] = resultsFull[process.env.argv[2]];
 
   // Something with logging time
   const now = new Date();
@@ -279,7 +287,10 @@ async function main() {
   }
 
   if((result - tradeAmount) < Number(process.env.MINIMUM_PROFIT)) {
-    fs.writeFileSync('./results.txt', JSON.stringify(results, null, 2));
+    fs.writeFileSync('./results.txt', JSON.stringify({
+      ...resultsFull,
+      [process.env.argv[2]]: { ...results, }
+    }, null, 2));
     return;
   }
   results.totalAttempts += 1;
@@ -343,7 +354,7 @@ async function main() {
   const executeResponse = await client.tx.broadcast(
     msgs,
     {
-      gasLimit: 1_500_000,
+      gasLimit: 2_000_000,
       feeDenom: 'uscrt',
     },
   )
@@ -362,7 +373,10 @@ async function main() {
     ? (results.executeLength + executeLength) / 2 
     : executeLength;
 
-  fs.writeFileSync('./results.txt', JSON.stringify(results, null, 2));
+  fs.writeFileSync('./results.txt', JSON.stringify({
+    ...resultsFull,
+    [process.env.argv[2]]: { ...results, }
+  }, null, 2));
 }
 
 try {
