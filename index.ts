@@ -279,6 +279,7 @@ async function main() {
   }
 
   if((result - tradeAmount) < Number(process.env.MINIMUM_PROFIT)) {
+    fs.writeFileSync('./results.txt', JSON.stringify(results, null, 2));
     return;
   }
   results.totalAttempts += 1;
