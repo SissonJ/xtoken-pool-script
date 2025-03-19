@@ -83,20 +83,20 @@ const getCentralTime = (date: Date): string => {
 
 const logger = {
   error: (msg: string, time: Date, error?: any) => {
-    console.error(`[${getCentralTime(time)} ${(process.env?.argv ?? [1,2,3])[2]} ERROR] ${msg}`, error);
+    console.error(`[${getCentralTime(time)} ${process.argv[2]} ERROR] ${msg}`, error);
   },
   info: (msg: string, time: Date) => {
-    console.log(`[${getCentralTime(time)} ${(process.env?.argv ?? [1,2,3])[2]} INFO] ${msg}`);
+    console.log(`[${getCentralTime(time)} ${process.argv[2]} INFO] ${msg}`);
   }
 };
 
 async function main() {
-  if(process.env?.argv === undefined) {
+  if(process.argv[2] === undefined) {
     throw new Error('Arugments are undefined');
   }
   if (!fs.existsSync('./results.txt')) {
     const initialState: Results = {
-      [process.env.argv[2]]: {
+      [process.argv[2]]: {
         totalAttempts: 0,
         successfulAttempts: 0,
         failedAttempts: 0,
@@ -107,7 +107,7 @@ async function main() {
 
   const resultsUnparsed = fs.readFileSync('./results.txt', 'utf-8');
   const resultsFull: Results = JSON.parse(resultsUnparsed);
-  const results: Results[string] = resultsFull[process.env.argv[2]];
+  const results: Results[string] = resultsFull[process.argv[2]];
 
   // Something with logging time
   const now = new Date();
@@ -289,7 +289,7 @@ async function main() {
   if((result - tradeAmount) < Number(process.env.MINIMUM_PROFIT)) {
     fs.writeFileSync('./results.txt', JSON.stringify({
       ...resultsFull,
-      [process.env.argv[2]]: { ...results, }
+      [process.argv[2]]: { ...results, }
     }, null, 2));
     return;
   }
@@ -375,7 +375,7 @@ async function main() {
 
   fs.writeFileSync('./results.txt', JSON.stringify({
     ...resultsFull,
-    [process.env.argv[2]]: { ...results, }
+    [process.argv[2]]: { ...results, }
   }, null, 2));
 }
 
