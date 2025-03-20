@@ -41,6 +41,7 @@ type SwapSimResponse = {
 type Results = {
   [key: string]: {
     start?: number,
+    lastUpdate?: number,
     totalAttempts: number,
     successfulAttempts: number,
     failedAttempts: number,
@@ -111,17 +112,14 @@ async function main() {
 
   // Something with logging time
   const now = new Date();
-  const start = results.start ?? now.getTime();
-  if(results.start === undefined) {
-    results.start = now.getTime();
-  }
-
-  if ((now.getTime() - start > 7_200_000 
-    && (now.getTime() - start) % 7_200_000 < 10_000) 
-    || now.getTime() - start < 15_000
-  ) {
+ if (results.start === undefined 
+   ||  now.getTime() - (results.lastUpdate ?? 0) > 7_200_000) {
+    results.lastUpdate = now.getTime();
+    if(results.start === undefined) {
+      results.start = now.getTime();
+    }
     logger.info(
-      `Bot running for ${Math.floor((now.getTime() - start) / 3_600_000)} hours` +
+      `Bot running for ${Math.floor((now.getTime() - results.start) / 3_600_000)} hours` +
       `  Total Attempts: ${results.totalAttempts}` +
       `  Successful: ${results.successfulAttempts}` +
       `  Failed: ${results.failedAttempts}` +
@@ -362,6 +360,12 @@ async function main() {
     logger.info(`ARBITRAGE ATTEMPT SUCCESSFUL - ${executeResponse.transactionHash}`, now);
     logger.info(JSON.stringify(executeResponse.jsonLog), now);
     results.successfulAttempts += 1;
+    fs.appendFile('../transactions.txt', 
+      `${now.getTime()},${executeResponse.transactionHash},xToken\n`, 
+      (err) => {
+        if (err) logger.error('Failed to append transaction hash', now, err);
+      }
+    );
   } else {
     logger.info(`ARBITRAGE ATTEMPT FAILED - ${executeResponse.transactionHash}`, now);
     logger.info(JSON.stringify(executeResponse.jsonLog), now);
