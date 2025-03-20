@@ -47,6 +47,7 @@ type Results = {
     failedAttempts: number,
     queryLength?: number,
     executeLength?: number,
+    lastFailed?: number,
   },
 }
 
@@ -118,13 +119,17 @@ async function main() {
     if(results.start === undefined) {
       results.start = now.getTime();
     }
+    if(now.getTime() - (results.lastFailed ?? 0) < 7_200_000 ) {
+      logger.info(`Last failed attempt was ${Math.floor((now.getTime() - 
+         (results.lastFailed ?? 0)) / 3_600_000)} hours ago`, now);
+      return;
+    }
     logger.info(
       `Bot running for ${Math.floor((now.getTime() - results.start) / 3_600_000)} hours` +
       `  Total Attempts: ${results.totalAttempts}` +
       `  Successful: ${results.successfulAttempts}` +
       `  Failed: ${results.failedAttempts}` +
-      `  Average Query Length: ${results.queryLength?.toFixed(3)}` +
-      `  Average Execute Length: ${results.executeLength?.toFixed(3) ?? -1}`,
+      `  Average Query Length: ${results.queryLength?.toFixed(3)}`,
       now
     );
   }
@@ -254,22 +259,22 @@ async function main() {
       },
     }) as SwapSimResponse;
     secondActionInput = Number(swapFirstResponse.swap_simulation.result.return_amount);
-    const swapFirstFinalAmount = ((Number(swapFirstResponse.swap_simulation.result.return_amount) 
+    const swapFirstFinalAmount = ((secondActionInput 
       * vaultTotalAssets) / xTokenSupply).toFixed(0);
     result = Number(swapFirstFinalAmount);
   } else { // Mint first
     if(supplyCap < tradeAmount) {
       tradeAmount = supplyCap;
     }
-    const xTokenMintAmount = ((tradeAmount * xTokenSupply) / vaultTotalAssets).toFixed(0);
-    secondActionInput = Number(xTokenMintAmount);
+    const xTokenMintAmount = ((tradeAmount * xTokenSupply) / vaultTotalAssets);
+    secondActionInput = xTokenMintAmount;
     const swapSecondResponse = await client.query.compute.queryContract({
       contract_address: process.env.SHADESWAP_ADDRESS!,
       code_hash: process.env.SHADESWAP_CODE_HASH,
       query: {
         swap_simulation: {
           offer: {
-             amount: xTokenMintAmount, 
+             amount: secondActionInput.toFixed(0), 
              token: {
                custom_token: {
                  contract_addr: process.env.XTOKEN_ADDRESS,
@@ -302,7 +307,7 @@ async function main() {
         recipient: process.env.SHADESWAP_ADDRESS,
         recipient_code_hash: process.env.SHADESWAP_CODE_HASH,
         amount: tradeAmount.toFixed(0),
-        msg: encodeJsonToB64({ swap_tokens:{ expected_return: String(secondActionInput), } })
+        msg: encodeJsonToB64({ swap_tokens:{ expected_return: tradeAmount.toFixed(0), } })
       }
     };
     secondMsg = {
@@ -370,6 +375,7 @@ async function main() {
     logger.info(`ARBITRAGE ATTEMPT FAILED - ${executeResponse.transactionHash}`, now);
     logger.info(JSON.stringify(executeResponse.jsonLog), now);
     logger.info(JSON.stringify(executeResponse.rawLog), now);
+    results.lastFailed = now.getTime();
     results.failedAttempts += 1;
   }
   const executeLength = (new Date().getTime() - beforeExeucte) / 1_000;
