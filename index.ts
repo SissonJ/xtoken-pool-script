@@ -95,7 +95,7 @@ async function main() {
   if(process.argv[2] === undefined) {
     throw new Error('Arugments are undefined');
   }
-  if (!fs.existsSync('./results.txt')) {
+  if (!fs.existsSync(`./results${process.argv[2]}.txt`)) {
     const initialState: Results = {
       [process.argv[2]]: {
         totalAttempts: 0,
@@ -103,10 +103,10 @@ async function main() {
         failedAttempts: 0,
       }
     };
-    fs.writeFileSync('./results.txt', JSON.stringify(initialState));
+    fs.writeFileSync(`./results${process.argv[2]}.txt`, JSON.stringify(initialState));
   }
 
-  const resultsUnparsed = fs.readFileSync('./results.txt', 'utf-8');
+  const resultsUnparsed = fs.readFileSync(`./results${process.argv[2]}.txt`, 'utf-8');
   const resultsFull: Results = JSON.parse(resultsUnparsed);
   const results: Results[string] = resultsFull[process.argv[2]];
 
@@ -285,7 +285,7 @@ async function main() {
   }
 
   if((result - tradeAmount) < Number(process.env.MINIMUM_PROFIT)) {
-    fs.writeFileSync('./results.txt', JSON.stringify({
+    fs.writeFileSync(`./results${process.argv[2]}.txt`, JSON.stringify({
       ...resultsFull,
       [process.argv[2]]: { ...results, }
     }, null, 2));
@@ -377,7 +377,7 @@ async function main() {
     ? (results.executeLength + executeLength) / 2 
     : executeLength;
 
-  fs.writeFileSync('./results.txt', JSON.stringify({
+  fs.writeFileSync(`./results${process.argv[2]}.txt`, JSON.stringify({
     ...resultsFull,
     [process.argv[2]]: { ...results, }
   }, null, 2));
