@@ -227,7 +227,7 @@ async function main() {
   if (vaultTotalAssets > 0) {
     marketRate = xTokenSupply / vaultTotalAssets;
   }
-  const percentOfPool = baseTokenAmount * 0.01;
+  const percentOfPool = baseTokenAmount * 0.10;
   let tradeAmount = walletBalance > percentOfPool ? percentOfPool : walletBalance;
 
   let swapFirst = false;
@@ -242,7 +242,7 @@ async function main() {
       query: {
         swap_simulation: {
           offer: { 
-            amount: String(tradeAmount), 
+            amount: tradeAmount.toFixed(0), 
             token: {
               custom_token: {
                  contract_addr: process.env.BASE_TOKEN_ADDRESS,
@@ -301,7 +301,7 @@ async function main() {
       send: {
         recipient: process.env.SHADESWAP_ADDRESS,
         recipient_code_hash: process.env.SHADESWAP_CODE_HASH,
-        amount: String(walletBalance),
+        amount: tradeAmount.toFixed(0),
         msg: encodeJsonToB64({ swap_tokens:{ expected_return: String(secondActionInput), } })
       }
     };
@@ -309,7 +309,7 @@ async function main() {
       send: {
         recipient: process.env.MONEY_MARKET_ADDRESS,
         recipient_code_hash: process.env.MONEY_MARKET_CODE_HASH,
-        amount: String(secondActionInput),
+        amount: secondActionInput.toFixed(0),
         msg: encodeJsonToB64({ withdraw_supply: {} })
       }
     };
@@ -318,7 +318,7 @@ async function main() {
       send: {
         recipient: process.env.MONEY_MARKET_ADDRESS,
         recipient_code_hash: process.env.MONEY_MARKET_CODE_HASH,
-        amount: String(walletBalance),
+        amount: tradeAmount.toFixed(0),
         msg: encodeJsonToB64({ supply: {} })
       }
     };
@@ -326,7 +326,7 @@ async function main() {
       send: {
         recipient: process.env.SHADESWAP_ADDRESS,
         recipient_code_hash: process.env.SHADESWAP_CODE_HASH,
-        amount: String(secondActionInput),
+        amount: secondActionInput.toFixed(0),
         msg: encodeJsonToB64({ swap_tokens:{ expected_return: String(result), } })
       }
     };
@@ -358,7 +358,7 @@ async function main() {
   )
   if(executeResponse.code === 0) {
     logger.info(`ARBITRAGE ATTEMPT SUCCESSFUL - ${executeResponse.transactionHash}`, now);
-    logger.info(JSON.stringify(executeResponse.jsonLog), now);
+    logger.info(JSON.stringify(executeResponse.jsonLog, null, 2), now);
     results.successfulAttempts += 1;
     fs.appendFile('../transactions.txt', 
       `${now.getTime()},${executeResponse.transactionHash},xToken\n`, 
