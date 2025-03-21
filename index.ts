@@ -391,9 +391,5 @@ async function main() {
   }, null, 2));
 }
 
-try {
-  Promise.resolve(main());
-} catch(error: any) {
-  logger.error(`Error in main execution`, new Date(), error);
-}
+main().catch((error:any) => {logger.error(error?.message, new Date());});
 
