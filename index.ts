@@ -361,16 +361,18 @@ async function main() {
       feeDenom: 'uscrt',
     },
   )
-  if(executeResponse.code === 0) {
-    logger.info(`ARBITRAGE ATTEMPT SUCCESSFUL - ${executeResponse.transactionHash}`, now);
-    logger.info(JSON.stringify(executeResponse.jsonLog, null, 2), now);
-    results.successfulAttempts += 1;
+  if(executeResponse?.transactionHash !== undefined) {
     fs.appendFile('../transactions.txt', 
       `${now.getTime()},${executeResponse.transactionHash},xToken\n`, 
       (err) => {
         if (err) logger.error('Failed to append transaction hash', now, err);
       }
     );
+  }
+  if(executeResponse.code === 0) {
+    logger.info(`ARBITRAGE ATTEMPT SUCCESSFUL - ${executeResponse.transactionHash}`, now);
+    logger.info(JSON.stringify(executeResponse.jsonLog, null, 2), now);
+    results.successfulAttempts += 1;
   } else {
     logger.info(`ARBITRAGE ATTEMPT FAILED - ${executeResponse.transactionHash}`, now);
     logger.info(JSON.stringify(executeResponse.jsonLog), now);
