@@ -402,7 +402,6 @@ let swapSecondResponse;
     secondActionInput = swapFirstSecondActionInput;
     swapFirst = true;
   }
-  console.log(profit);
   results.profit ? results.profit.push(profit): results.profit = [profit];
   if(profit < Number(process.env.MINIMUM_PROFIT)) {
     fs.writeFileSync(`./results${process.argv[2]}.txt`, JSON.stringify({
