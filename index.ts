@@ -49,6 +49,7 @@ type Results = {
     failedAttempts: number,
     failedQueries: number,
     queryLength: number[],
+    profit?: number[],
     executeLength?: number,
     lastFailed?: number,
     hasNotified?: boolean,
@@ -108,6 +109,7 @@ async function main() {
         failedAttempts: 0,
         failedQueries: 0,
         queryLength: [],
+        profit: [],
       }
     };
     fs.writeFileSync(`./results${process.argv[2]}.txt`, JSON.stringify(initialState));
@@ -119,9 +121,14 @@ async function main() {
 
   const now = new Date();
   if(now.getTime() - (results.lastFailed ?? 0) < 7_200_000 ) {
-    logger.info(`On cooldown from last failed`, now);
+    if(!results.hasNotified) {
+      logger.info(`On cooldown from last failed`, now);
+    }
     results.hasNotified = true;
-    fs.writeFileSync(`./results${process.argv[2]}.txt`, JSON.stringify(results));
+    fs.writeFileSync(`./results${process.argv[2]}.txt`, JSON.stringify({
+      ...resultsFull,
+      [process.argv[2]]: { ...results, }
+    }, null, 2));
     return;
   }
   results.hasNotified = false;
@@ -134,12 +141,17 @@ async function main() {
     }
     const queryLength = results.queryLength.reduce((acc, curr) => acc + curr, 0) 
       / results.queryLength.length;
+    const profitArray = results.profit ?? [];
+    const profit = profitArray.reduce((acc, curr) => acc + curr, 0) 
+      / profitArray.length;
+    results.profit = [];
     logger.info(
       `Bot running for ${Math.floor((now.getTime() - results.start) / 3_600_000)} hours` +
       `  Total Attempts: ${results.totalAttempts}` +
       `  Successful: ${results.successfulAttempts}` +
       `  Failed: ${results.failedAttempts}` +
-      `  Average Query Length: ${queryLength?.toFixed(3)}`,
+      `  Average Query Length: ${queryLength?.toFixed(3)}` +
+      `  Average Profit: ${profit?.toFixed(3)}`,
       now
     );
   }
@@ -209,7 +221,10 @@ async function main() {
       query: queryMsg,
     }) as BatchQueryResponse;
   } catch (e: any) {
-    fs.writeFileSync('./results.txt', JSON.stringify(results, null, 2));
+    fs.writeFileSync(`./results${process.argv[2]}.txt`, JSON.stringify({
+      ...resultsFull,
+      [process.argv[2]]: { ...results, }
+    }, null, 2));
     if(e.message.includes('invalid json response')) {
       results.failedQueries += 1;
       return;
@@ -219,7 +234,10 @@ async function main() {
 
   if(response === undefined) {
     results.failedQueries += 1;
-    fs.writeFileSync('./results.txt', JSON.stringify(results, null, 2));
+    fs.writeFileSync(`./results${process.argv[2]}.txt`, JSON.stringify({
+      ...resultsFull,
+      [process.argv[2]]: { ...results, }
+    }, null, 2));
     return;
   }
   
@@ -295,7 +313,10 @@ async function main() {
       },
     }) as SwapSimResponse;
   } catch (e: any) {
-    fs.writeFileSync('./results.txt', JSON.stringify(results, null, 2));
+    fs.writeFileSync(`./results${process.argv[2]}.txt`, JSON.stringify({
+      ...resultsFull,
+      [process.argv[2]]: { ...results, }
+    }, null, 2));
     if(e.message.includes('invalid json response')) {
       results.failedQueries += 1;
       return;
@@ -304,11 +325,16 @@ async function main() {
   }
   if(swapFirstResponse === undefined) {
     results.failedQueries += 1;
-    fs.writeFileSync('./results.txt', JSON.stringify(results, null, 2));
+    fs.writeFileSync(`./results${process.argv[2]}.txt`, JSON.stringify({
+      ...resultsFull,
+      [process.argv[2]]: { ...results, }
+    }, null, 2));
     return;
   }
 
-  const swapFirstSecondActionInput = Number(swapFirstResponse.swap_simulation.result.return_amount);
+  const swapFirstSecondActionInput = Number(
+    swapFirstResponse.swap_simulation.result.return_amount
+  ) * 0.99999;
   const swapFirstFinalAmount = ((swapFirstSecondActionInput
     * vaultTotalAssets) / xTokenSupply).toFixed(0);
   const swapFirstResult = Number(swapFirstFinalAmount);
@@ -339,7 +365,10 @@ let swapSecondResponse;
       },
     }) as SwapSimResponse;
   } catch (e: any) {
-    fs.writeFileSync('./results.txt', JSON.stringify(results, null, 2));
+    fs.writeFileSync(`./results${process.argv[2]}.txt`, JSON.stringify({
+      ...resultsFull,
+      [process.argv[2]]: { ...results, }
+    }, null, 2));
     if(e.message.includes('invalid json response')) {
       results.failedQueries += 1;
       return;
@@ -348,11 +377,15 @@ let swapSecondResponse;
   }
   if(swapSecondResponse === undefined) {
     results.failedQueries += 1;
-    fs.writeFileSync('./results.txt', JSON.stringify(results, null, 2));
+    fs.writeFileSync(`./results${process.argv[2]}.txt`, JSON.stringify({
+      ...resultsFull,
+      [process.argv[2]]: { ...results, }
+    }, null, 2));
     return;
   }
 
   const swapSecondFinalAmount = Number(swapSecondResponse.swap_simulation.result.return_amount)
+    * 0.99999;
   const mintFirstResult = swapSecondFinalAmount;
 
   const swapFirstProfit = (swapFirstResult - tradeAmount) 
@@ -369,6 +402,8 @@ let swapSecondResponse;
     secondActionInput = swapFirstSecondActionInput;
     swapFirst = true;
   }
+  console.log(profit);
+  results.profit ? results.profit.push(profit): results.profit = [profit];
   if(profit < Number(process.env.MINIMUM_PROFIT)) {
     fs.writeFileSync(`./results${process.argv[2]}.txt`, JSON.stringify({
       ...resultsFull,
@@ -425,7 +460,7 @@ let swapSecondResponse;
       msg: { 
         borrow:{
           token: process.env.BASE_TOKEN_ADDRESS, // Borrow base token to swap
-          amount: String(tradeAmount), // The amount we want to borrow
+          amount: tradeAmount.toFixed(0), // The amount we want to borrow
         } 
       }, 
       sent_funds: [],
@@ -452,7 +487,7 @@ let swapSecondResponse;
         send: {
           recipient: process.env.MONEY_MARKET_ADDRESS,
           recipient_code_hash: process.env.MONEY_MARKET_CODE_HASH,
-          amount: String(result),
+          amount: result.toFixed(0),
           msg: encodeJsonToB64({ repay: {} })
         } 
       }, 
@@ -481,7 +516,6 @@ let swapSecondResponse;
     results.successfulAttempts += 1;
   } else {
     logger.info(`ARBITRAGE ATTEMPT FAILED - ${executeResponse.transactionHash}`, now);
-    logger.info(JSON.stringify(executeResponse.jsonLog), now);
     logger.info(JSON.stringify(executeResponse.rawLog), now);
     results.lastFailed = now.getTime();
     results.failedAttempts += 1;
