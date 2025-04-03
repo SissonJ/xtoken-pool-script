@@ -12,6 +12,7 @@ enum QUERY_TYPE {
   TOKEN_INFO = 'token_info',
   PAIR = 'pair',
   VAULT = 'vault',
+  ORACLE = 'oracle',
 }
 
 type BatchQueryResponse = {
@@ -42,12 +43,15 @@ type Results = {
   [key: string]: {
     start?: number,
     lastUpdate?: number,
+    lastAttempt?: number,
     totalAttempts: number,
     successfulAttempts: number,
     failedAttempts: number,
-    queryLength?: number,
+    failedQueries: number,
+    queryLength: number[],
     executeLength?: number,
     lastFailed?: number,
+    hasNotified?: boolean,
   },
 }
 
@@ -102,6 +106,8 @@ async function main() {
         totalAttempts: 0,
         successfulAttempts: 0,
         failedAttempts: 0,
+        failedQueries: 0,
+        queryLength: [],
       }
     };
     fs.writeFileSync(`./results${process.argv[2]}.txt`, JSON.stringify(initialState));
@@ -111,25 +117,29 @@ async function main() {
   const resultsFull: Results = JSON.parse(resultsUnparsed);
   const results: Results[string] = resultsFull[process.argv[2]];
 
-  // Something with logging time
   const now = new Date();
+  if(now.getTime() - (results.lastFailed ?? 0) < 7_200_000 ) {
+    logger.info(`On cooldown from last failed`, now);
+    results.hasNotified = true;
+    fs.writeFileSync(`./results${process.argv[2]}.txt`, JSON.stringify(results));
+    return;
+  }
+  results.hasNotified = false;
+
  if (results.start === undefined 
    ||  now.getTime() - (results.lastUpdate ?? 0) > 7_200_000) {
     results.lastUpdate = now.getTime();
     if(results.start === undefined) {
       results.start = now.getTime();
     }
-    if(now.getTime() - (results.lastFailed ?? 0) < 7_200_000 ) {
-      logger.info(`Last failed attempt was ${Math.floor((now.getTime() - 
-         (results.lastFailed ?? 0)) / 3_600_000)} hours ago`, now);
-      return;
-    }
+    const queryLength = results.queryLength.reduce((acc, curr) => acc + curr, 0) 
+      / results.queryLength.length;
     logger.info(
       `Bot running for ${Math.floor((now.getTime() - results.start) / 3_600_000)} hours` +
       `  Total Attempts: ${results.totalAttempts}` +
       `  Successful: ${results.successfulAttempts}` +
       `  Failed: ${results.failedAttempts}` +
-      `  Average Query Length: ${results.queryLength?.toFixed(3)}`,
+      `  Average Query Length: ${queryLength?.toFixed(3)}`,
       now
     );
   }
@@ -139,16 +149,27 @@ async function main() {
     batch: {
       queries: [
         {
+          id: encodeJsonToB64(QUERY_TYPE.ORACLE),
+          contract: {
+            address: process.env.ORACLE_ADDRESS,
+            code_hash: process.env.ORACLE_CODE_HASH,
+          },
+          query: encodeJsonToB64({ get_price:{ key:process.env.ORACLE_KEY } }),
+        },
+        {
           id: encodeJsonToB64(QUERY_TYPE.BALANCE),
           contract: {
-            address: process.env.BASE_TOKEN_ADDRESS,
-            code_hash: process.env.BASE_TOKEN_CODE_HASH,
+            address: process.env.MONEY_MARKET_ADDRESS,
+            code_hash: process.env.MONEY_MARKET_CODE_HASH,
           },
-          query: encodeJsonToB64({
-            balance: {
-              address: process.env.ARB_V4_ADDRESS,
-              key: process.env.BASE_TOKEN_VIEWING_KEY,
-            }
+          query: encodeJsonToB64({ 
+            user_position: { 
+              authentication: { 
+                permit: JSON.parse(
+                  process.env.SHADE_MASTER_PERMIT!
+                ) 
+              } 
+            } 
           }),
         },
         {
@@ -180,28 +201,51 @@ async function main() {
   };
 
   const beforeQuery = new Date().getTime();
-  const response = await client.query.compute.queryContract({
-    contract_address: process.env.BATCH_QUERY_CONTRACT!,
-    code_hash: process.env.BATCH_QUERY_HASH,
-    query: queryMsg,
-  }) as BatchQueryResponse;
+  let response;
+  try {
+    response = await client.query.compute.queryContract({
+      contract_address: process.env.BATCH_QUERY_CONTRACT!,
+      code_hash: process.env.BATCH_QUERY_HASH,
+      query: queryMsg,
+    }) as BatchQueryResponse;
+  } catch (e: any) {
+    fs.writeFileSync('./results.txt', JSON.stringify(results, null, 2));
+    if(e.message.includes('invalid json response')) {
+      results.failedQueries += 1;
+      return;
+    }
+    throw new Error(e);
+  }
+
+  if(response === undefined) {
+    results.failedQueries += 1;
+    fs.writeFileSync('./results.txt', JSON.stringify(results, null, 2));
+    return;
+  }
   
-  const queryLength = (new Date().getTime() - beforeQuery) / 1_000;
-  results.queryLength = results.queryLength ? (results.queryLength + queryLength) / 2 : queryLength;
+  const queryLength = (new Date().getTime() - beforeQuery) / 1000;
+  results.queryLength.push(queryLength);
+  if(results.queryLength.length > 100) {
+    // Keep the last 10 query lengths for average calculation
+    results.queryLength.shift();
+  }
 
   let xTokenSupply;
   let baseTokenAmount;
   let xTokenAmount;
-  let walletBalance;
+  let maxBorrowUsd;
   let vaultTotalAssets;
   let supplyCap;
+  let price;
   response.batch.responses.forEach((encryptedResp) => {
     const id = decodeB64ToJson(encryptedResp.id);
     const responseData = decodeB64ToJson(encryptedResp.response.response);
-    if(id === QUERY_TYPE.TOKEN_INFO) {
+    if(id === QUERY_TYPE.ORACLE) {
+      price = Number(responseData.data.rate / 10**18);
+    } else if(id === QUERY_TYPE.TOKEN_INFO) {
       xTokenSupply = Number(responseData.token_info.total_supply);
     } else if(id === QUERY_TYPE.BALANCE) {
-      walletBalance = Number(responseData.balance.amount);
+      maxBorrowUsd = Number(responseData.max_borrow_value);
     } else if(id === QUERY_TYPE.PAIR) {
       baseTokenAmount = Number(responseData.get_pair_info.amount_0);
       xTokenAmount = Number(responseData.get_pair_info.amount_1);
@@ -221,27 +265,19 @@ async function main() {
     || xTokenSupply === undefined
     || vaultTotalAssets === undefined
     || isNaN(vaultTotalAssets)
-    || walletBalance === undefined
+    || maxBorrowUsd === undefined
     || supplyCap === undefined
+    || price === undefined
   ) {
     throw new Error('Missing required data from batch query response');
   }
 
-  const swapRate = baseTokenAmount / xTokenAmount;
-  let marketRate = 0;
-  if (vaultTotalAssets > 0) {
-    marketRate = xTokenSupply / vaultTotalAssets;
-  }
-  const percentOfPool = baseTokenAmount * 0.10;
-  let tradeAmount = walletBalance > percentOfPool ? percentOfPool : walletBalance;
+  const tradeAmount = Math.floor(((maxBorrowUsd * 0.98) / price) 
+    * 10**Number(process.env.DECIMALS!));
 
-  let swapFirst = false;
-  let secondActionInput = 0;
-  let result = 0;
-  if (swapRate < marketRate) { // Swap First
-    swapFirst = true;
-
-    const swapFirstResponse = await client.query.compute.queryContract({
+  let swapFirstResponse;
+  try {
+    swapFirstResponse = await client.query.compute.queryContract({
       contract_address: process.env.SHADESWAP_ADDRESS!,
       code_hash: process.env.SHADESWAP_CODE_HASH,
       query: {
@@ -258,23 +294,40 @@ async function main() {
         }, 
       },
     }) as SwapSimResponse;
-    secondActionInput = Number(swapFirstResponse.swap_simulation.result.return_amount);
-    const swapFirstFinalAmount = ((secondActionInput 
-      * vaultTotalAssets) / xTokenSupply).toFixed(0);
-    result = Number(swapFirstFinalAmount);
-  } else { // Mint first
-    if(supplyCap < tradeAmount) {
-      tradeAmount = supplyCap;
+  } catch (e: any) {
+    fs.writeFileSync('./results.txt', JSON.stringify(results, null, 2));
+    if(e.message.includes('invalid json response')) {
+      results.failedQueries += 1;
+      return;
     }
-    const xTokenMintAmount = ((tradeAmount * xTokenSupply) / vaultTotalAssets);
-    secondActionInput = xTokenMintAmount;
-    const swapSecondResponse = await client.query.compute.queryContract({
+    throw new Error(e);
+  }
+  if(swapFirstResponse === undefined) {
+    results.failedQueries += 1;
+    fs.writeFileSync('./results.txt', JSON.stringify(results, null, 2));
+    return;
+  }
+
+  const swapFirstSecondActionInput = Number(swapFirstResponse.swap_simulation.result.return_amount);
+  const swapFirstFinalAmount = ((swapFirstSecondActionInput
+    * vaultTotalAssets) / xTokenSupply).toFixed(0);
+  const swapFirstResult = Number(swapFirstFinalAmount);
+  // MINT FIRST
+  let mintFirstTradeAmount = tradeAmount;
+  if(supplyCap < tradeAmount) {
+    mintFirstTradeAmount = supplyCap;
+  }
+  const xTokenMintAmount = ((mintFirstTradeAmount * xTokenSupply) / vaultTotalAssets);
+  const mintFirstSecondActionInput = xTokenMintAmount;
+let swapSecondResponse;
+  try {
+    swapSecondResponse = await client.query.compute.queryContract({
       contract_address: process.env.SHADESWAP_ADDRESS!,
       code_hash: process.env.SHADESWAP_CODE_HASH,
       query: {
         swap_simulation: {
           offer: {
-             amount: secondActionInput.toFixed(0), 
+             amount: mintFirstSecondActionInput.toFixed(0), 
              token: {
                custom_token: {
                  contract_addr: process.env.XTOKEN_ADDRESS,
@@ -285,11 +338,38 @@ async function main() {
         }, 
       },
     }) as SwapSimResponse;
-    const swapSecondFinalAmount = Number(swapSecondResponse.swap_simulation.result.return_amount)
-    result = swapSecondFinalAmount;
+  } catch (e: any) {
+    fs.writeFileSync('./results.txt', JSON.stringify(results, null, 2));
+    if(e.message.includes('invalid json response')) {
+      results.failedQueries += 1;
+      return;
+    }
+    throw new Error(e);
+  }
+  if(swapSecondResponse === undefined) {
+    results.failedQueries += 1;
+    fs.writeFileSync('./results.txt', JSON.stringify(results, null, 2));
+    return;
   }
 
-  if((result - tradeAmount) < Number(process.env.MINIMUM_PROFIT)) {
+  const swapSecondFinalAmount = Number(swapSecondResponse.swap_simulation.result.return_amount)
+  const mintFirstResult = swapSecondFinalAmount;
+
+  const swapFirstProfit = (swapFirstResult - tradeAmount) 
+    * price / 10 ** Number(process.env.DECIMALS!);
+  const mintFirstProfit = (mintFirstResult - mintFirstTradeAmount) 
+    * price / 10 ** Number(process.env.DECIMALS!);
+  let swapFirst = false;
+  let profit = mintFirstProfit;
+  let result = mintFirstResult;
+  let secondActionInput = mintFirstSecondActionInput;
+  if(swapFirstProfit > mintFirstProfit) {
+    profit = swapFirstProfit;
+    result = swapFirstResult;
+    secondActionInput = swapFirstSecondActionInput;
+    swapFirst = true;
+  }
+  if(profit < Number(process.env.MINIMUM_PROFIT)) {
     fs.writeFileSync(`./results${process.argv[2]}.txt`, JSON.stringify({
       ...resultsFull,
       [process.argv[2]]: { ...results, }
@@ -307,7 +387,7 @@ async function main() {
         recipient: process.env.SHADESWAP_ADDRESS,
         recipient_code_hash: process.env.SHADESWAP_CODE_HASH,
         amount: tradeAmount.toFixed(0),
-        msg: encodeJsonToB64({ swap_tokens:{ expected_return: tradeAmount.toFixed(0), } })
+        msg: encodeJsonToB64({ swap_tokens:{ expected_return: secondActionInput.toFixed(0), } })
       }
     };
     secondMsg = {
@@ -340,6 +420,18 @@ async function main() {
   const msgs = [
     new MsgExecuteContract({
       sender: client.address, 
+      contract_address: process.env.MONEY_MARKET_ADDRESS!,
+      code_hash: process.env.MONEY_MARKET_CODE_HASH,
+      msg: { 
+        borrow:{
+          token: process.env.BASE_TOKEN_ADDRESS, // Borrow base token to swap
+          amount: String(tradeAmount), // The amount we want to borrow
+        } 
+      }, 
+      sent_funds: [],
+    }),
+    new MsgExecuteContract({
+      sender: client.address, 
       contract_address: process.env.BASE_TOKEN_ADDRESS!,
       code_hash: process.env.BASE_TOKEN_CODE_HASH,
       msg: firstMsg, 
@@ -351,13 +443,27 @@ async function main() {
       code_hash: process.env.XTOKEN_CODE_HASH,
       msg: secondMsg, 
       sent_funds: [],
-    })
+    }),
+    new MsgExecuteContract({
+      sender: client.address, 
+      contract_address: process.env.BASE_TOKEN_ADDRESS!,
+      code_hash: process.env.BASE_TOKEN_CODE_HASH,
+      msg: {
+        send: {
+          recipient: process.env.MONEY_MARKET_ADDRESS,
+          recipient_code_hash: process.env.MONEY_MARKET_CODE_HASH,
+          amount: String(result),
+          msg: encodeJsonToB64({ repay: {} })
+        } 
+      }, 
+      sent_funds: [],
+    }),
   ]
 
   const executeResponse = await client.tx.broadcast(
     msgs,
     {
-      gasLimit: 2_000_000,
+      gasLimit: 4_000_000,
       feeDenom: 'uscrt',
     },
   )
