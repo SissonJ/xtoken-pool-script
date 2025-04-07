@@ -323,7 +323,7 @@ async function main() {
     }
     throw new Error(e);
   }
-  if(swapFirstResponse === undefined) {
+  if(swapFirstResponse?.swap_simulation?.result?.return_amount === undefined) {
     results.failedQueries += 1;
     fs.writeFileSync(`./results${process.argv[2]}.txt`, JSON.stringify({
       ...resultsFull,
@@ -375,7 +375,7 @@ let swapSecondResponse;
     }
     throw new Error(e);
   }
-  if(swapSecondResponse === undefined) {
+  if(swapSecondResponse?.swap_simulation?.result?.return_amount === undefined) {
     results.failedQueries += 1;
     fs.writeFileSync(`./results${process.argv[2]}.txt`, JSON.stringify({
       ...resultsFull,
