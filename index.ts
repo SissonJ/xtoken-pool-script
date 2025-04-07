@@ -290,9 +290,11 @@ async function main() {
     throw new Error('Missing required data from batch query response');
   }
 
-  const tradeAmount = Math.floor(((maxBorrowUsd * 0.98) / price) 
+  const liquidityCap = baseTokenAmount * 0.05;
+  const borrowCap = Math.floor(((maxBorrowUsd * 0.98) / price) 
     * 10**Number(process.env.DECIMALS!));
-
+  const tradeAmount = Math.min(liquidityCap, borrowCap);
+  
   let swapFirstResponse;
   try {
     swapFirstResponse = await client.query.compute.queryContract({
@@ -323,29 +325,27 @@ async function main() {
     }
     throw new Error(e);
   }
+  let swapFirstSecondActionInput;
   if(swapFirstResponse?.swap_simulation?.result?.return_amount === undefined) {
     results.failedQueries += 1;
-    fs.writeFileSync(`./results${process.argv[2]}.txt`, JSON.stringify({
-      ...resultsFull,
-      [process.argv[2]]: { ...results, }
-    }, null, 2));
-    return;
+    swapFirstSecondActionInput = 0;
+  } else {
+    swapFirstSecondActionInput = Number(
+      swapFirstResponse.swap_simulation.result.return_amount
+    ) * 0.99999;
   }
-
-  const swapFirstSecondActionInput = Number(
-    swapFirstResponse.swap_simulation.result.return_amount
-  ) * 0.99999;
   const swapFirstFinalAmount = ((swapFirstSecondActionInput
     * vaultTotalAssets) / xTokenSupply).toFixed(0);
   const swapFirstResult = Number(swapFirstFinalAmount);
   // MINT FIRST
   let mintFirstTradeAmount = tradeAmount;
   if(supplyCap < tradeAmount) {
-    mintFirstTradeAmount = supplyCap;
+    mintFirstTradeAmount = supplyCap > 0 ? supplyCap : 0;
   }
   const xTokenMintAmount = ((mintFirstTradeAmount * xTokenSupply) / vaultTotalAssets);
   const mintFirstSecondActionInput = xTokenMintAmount;
-let swapSecondResponse;
+
+  let swapSecondResponse;
   try {
     swapSecondResponse = await client.query.compute.queryContract({
       contract_address: process.env.SHADESWAP_ADDRESS!,
@@ -375,17 +375,14 @@ let swapSecondResponse;
     }
     throw new Error(e);
   }
+  let swapSecondFinalAmount;
   if(swapSecondResponse?.swap_simulation?.result?.return_amount === undefined) {
     results.failedQueries += 1;
-    fs.writeFileSync(`./results${process.argv[2]}.txt`, JSON.stringify({
-      ...resultsFull,
-      [process.argv[2]]: { ...results, }
-    }, null, 2));
-    return;
+    swapSecondFinalAmount = 0;
+  } else {
+    swapSecondFinalAmount = Number(swapSecondResponse.swap_simulation.result.return_amount)
+     * 0.99999;
   }
-
-  const swapSecondFinalAmount = Number(swapSecondResponse.swap_simulation.result.return_amount)
-    * 0.99999;
   const mintFirstResult = swapSecondFinalAmount;
 
   const swapFirstProfit = (swapFirstResult - tradeAmount) 
@@ -404,6 +401,7 @@ let swapSecondResponse;
   }
   results.profit ? results.profit.push(profit): results.profit = [profit];
   if(profit < Number(process.env.MINIMUM_PROFIT)) {
+
     fs.writeFileSync(`./results${process.argv[2]}.txt`, JSON.stringify({
       ...resultsFull,
       [process.argv[2]]: { ...results, }
